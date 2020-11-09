@@ -1,0 +1,278 @@
+---
+title: "LMER Tutorial"
+author: "Nandi"
+date: "21/10/2020"
+output: html_document
+---
+
+#Install packages
+```{r}
+packages <- c("tidyverse","ggplot2","parallel","data.table","readxl","lme4","lmerTest")
+if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
+  install.packages(setdiff(packages, rownames(installed.packages())))  
+}
+lapply(packages, library, character.only = TRUE)
+```
+
+#Load data
+```{r, echo=FALSE}
+#demographic:group, gender, age
+demo <- read.csv('demo.csv')
+
+#brain: subcortical volumes (pre-formatted FreeSurfer's "aseg")
+brain_long <- read.csv('brain.csv')
+```
+
+#Long format data
+```{r}
+#first, make demo long format
+demo_long <- demo %>% gather(wave,age,-SID,-gender,-group) %>%
+  mutate(wave = gsub("age_","",wave))
+
+#combine demo_long and brain_long
+df_long <- brain_long %>% left_join(., demo_long)
+head(df_long)
+
+#check format of dataset, format necessary variables as factors and numeric
+str(df_long)  #indicates that some variables are not appropriately formatted as factors
+df_long <- df_long %>% mutate(SID = as.factor(SID),            
+                              wave = as.factor(wave),
+                              gender = as.factor(gender)) %>%
+  mutate(age_c = age - mean(age))
+```
+
+#Plot spread of data
+```{r}
+df_plot <- df_long %>% mutate(age = round(as.numeric(age),2)) %>% arrange(age) %>%
+  mutate(SID = factor(SID, unique(SID)))
+
+plot_age <- ggplot(df_plot, aes(y=SID, x=age, group=SID, colour=gender))+
+  geom_line(size=.6,alpha=0.6) + 
+  ylab("Participants") +  #Specify titles for y-axis...
+  xlab("Age") +           #x-axis...
+  geom_point(size=2) +
+  theme_bw() +
+  theme_minimal(base_size = 18,
+                base_family = "Arial") +
+  theme(axis.line = element_line(colour = "black"),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        legend.position="none",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank()) + 
+  facet_wrap(~gender)
+plot_age
+```
+
+#Age-related trajectories in Right Amygdala (across gender)
+```{r}
+#null model with random intercept
+nullmod <- lmer(Right.Amygdala ~ 1 + (1|SID), df_long, REML=F)
+summary(nullmod)
+#linear model
+linmod <- lmer(Right.Amygdala ~ age_c + (1|SID), df_long, REML=F)
+summary(linmod)
+#quadratic model
+quadmod <- lmer(Right.Amygdala ~ poly(age_c,2) + (1|SID), df_long, REML=F)
+summary(quadmod)
+
+#compare across models
+anova(nullmod,linmod,quadmod) #seems like linear trajectory is the best fit based on AIC, BIC and Log-likelihood Ratio Test
+```
+
+#Plot trajectory
+```{r}
+#going to plot "linmod" as it was best fitting model
+
+#update model formula without random effects and predict Y
+fixed_form <- as.formula(lme4:::nobars(formula(linmod))[-2]) #this removes random effect from the model
+fixed_form
+mm<-model.matrix(fixed_form,df_plot) #this creates a matrix of values from adf to use when predicting Y 
+head(mm)
+df_plot$predY<-as.numeric(mm%*%fixef(linmod)) #this predicts Y based on the previous matrix and the fixed_form without random effects
+head(cbind(df_plot$Right.Amygdala,df_plot$predY))
+
+#bootstrapped confidence intervals - see this page: https://biologyforfun.wordpress.com/2015/06/17/confidence-intervals-for-prediction-in-glmms/
+predFun<-function(.) mm%*%fixef(.) 
+bb<-bootMer(linmod,FUN=predFun,nsim=1000,re.form=NA) #do this 1000 times
+bb_se<-apply(bb$t,2,function(x) x[order(x)][c(25,975)]) #as we did this 1000 times the 95% CI will be bordered by the 25th and 975th value
+df_plot$lwr<-bb_se[1,]
+df_plot$upr<-bb_se[2,]
+
+#plot
+plot_linmod <- ggplot(df_plot, aes(x=age, y=Right.Amygdala))+
+  geom_line(aes(group=SID),size=.3,alpha=0.3)+
+  geom_point(aes(group=SID),size=2,alpha=0.3)+
+  geom_smooth(aes(x=age, y=predY), method = "lm", 
+              formula = as.formula(y ~ x),
+              se = FALSE, size=1) +
+  geom_ribbon(aes(y=predY, ymin=lwr, ymax=upr), alpha=0.3) +
+  theme_bw() +
+  theme_minimal(base_size = 24, base_family = "Arial") +
+  theme(axis.line = element_line(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        legend.position="none") + 
+  ylab("Right Amygdala") + 
+  xlab("Age") 
+plot_linmod
+```
+
+#Now let's examine sex differences
+```{r}
+#group main effect
+sexmod_main <- lmer(Right.Amygdala ~ gender + age_c + (1|SID), df_long, REML=F)
+summary(sexmod_main)
+
+#group differences in linear trajectory
+sexmod_int <- lmer(Right.Amygdala ~ gender * age_c + (1|SID), df_long, REML=F)
+summary(sexmod_int)
+
+#compare with and without group differences 
+anova(linmod, sexmod_main, sexmod_int)  #seems like there is a main effect of sex 
+
+#can finally see is there is additional variance in slopes within best-fitting linear model
+sexmod_main_randSlope <- lmer(Right.Amygdala ~ gender * age_c + (1 + age_c|SID), df_long, REML=F)
+summary(sexmod_main_randSlope)
+
+#compare linmod with and without random intercepts
+anova(sexmod_main,sexmod_main_randSlope)  #random slopes do not improve model fit beyond sex main effect  
+```
+
+#Plot sex differences 
+```{r}
+#going to plot "sexmod_main" as it was best fitting model.
+
+#update model formula without random effects and predict Y
+fixed_form <- as.formula(lme4:::nobars(formula(sexmod_main))[-2]) #this removes random effect from the model
+fixed_form
+mm<-model.matrix(fixed_form,df_plot) #this creates a matrix of values from adf to use when predicting Y 
+head(mm)
+df_plot$predY<-as.numeric(mm%*%fixef(sexmod_main)) #this predicts Y based on the previous matrix and the fixed_form without random effects
+head(cbind(df_plot$Right.Amygdala,df_plot$predY))
+
+#bootstrapped confidence intervals - see this page: https://biologyforfun.wordpress.com/2015/06/17/confidence-intervals-for-prediction-in-glmms/
+predFun<-function(.) mm%*%fixef(.) 
+bb<-bootMer(sexmod_main,FUN=predFun,nsim=1000,re.form=NA) #do this 1000 times
+bb_se<-apply(bb$t,2,function(x) x[order(x)][c(25,975)]) #as we did this 1000 times the 95% CI will be bordered by the 25th and 975th value
+df_plot$lwr<-bb_se[1,]
+df_plot$upr<-bb_se[2,]
+
+#plot
+plot_sexmod_main <- ggplot(df_plot, aes(x=age, y=Right.Amygdala))+
+  geom_line(aes(colour=gender, group=SID),size=.3,alpha=0.3)+
+  geom_point(aes(colour=gender, group=SID),size=2,alpha=0.3)+
+  geom_smooth(aes(x=age, y=predY, colour=gender), method = "lm", 
+              formula = as.formula(y ~ x),
+              se = FALSE, size=1) +
+  geom_ribbon(aes(y=predY, ymin=lwr, ymax=upr), alpha=0.3) +
+  theme_bw() +
+  theme_minimal(base_size = 24, base_family = "Arial") +
+  theme(axis.line = element_line(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        legend.position="none") + 
+  facet_wrap(~gender) + 
+  ylab("Right Amygdala") + 
+  xlab("Age") 
+plot_sexmod_main
+```
+
+#Loop through multiple brain regions
+```{r}
+#in order to loop through multiple brain regions, we need to create an extra long
+
+#first, let's create a list of regions that we want to loop through
+regions <- grep("Left|Right",colnames(brain_long), value=T)
+
+#now make an extra long data frame
+df_xlong <- df_long %>% gather(region, value, -SID, -wave, -gender, -group, -age, -age_c)
+View(df_xlong)
+
+#now loop through regions using lapply. 
+#X = regions to loop through, df = dataframe to supply to each iteration of the loop
+models <- lapply(X=as.character(as.list(regions)), df=df_xlong, 
+                 FUN=function(roi_name, df) {
+  print(roi_name)
+
+  #now create a new dataframe within the loop that is filtered to roi_name
+  adf <- df %>% filter(region==roi_name) %>% 
+    mutate(SID = as.factor(SID),
+           age_c = age - mean(age),
+           gender = as.factor(gender),
+           wave = as.factor(wave))
+  
+  #run models on this new dataframe. value = volume of each region
+  nullmod <- lmer(value  ~ 1 + (1 | SID), data=adf, REML=FALSE)
+  linmod <- lmer(value ~ age_c + (1|SID), data=adf, REML=F)
+  quadmod <- lmer(value ~ poly(age_c,2) + (1|SID), data=adf, REML=F)
+  devcomp <- anova(nullmod,linmod,quadmod)
+  devcomp <- as.data.frame(devcomp) %>% mutate(comp = "DEV")
+  
+  #now run a series of sex models that account for all possible developmental models (i.e., best fitting could be null, linear or quadratic - and this might vary across regions) 
+  
+  #nullmod + sex (cannot have sex interaction as there is no age term in the null model)
+  sexmod_main0 <- lmer(value  ~ gender + (1 | SID), data=adf, REML=FALSE)
+  sexcomp_null <- anova(nullmod,sexmod_main0)
+  
+  #linmod + sex (both main effect and interaction)
+  sexmod_main1 <- lmer(value ~ gender + age_c + (1|SID), data=adf, REML=F)
+  sexmod_int1 <- lmer(value ~ gender*age_c + (1|SID), data=adf, REML=F)
+  sexcomp_lin <- anova(nullmod,sexmod_main1,sexmod_int1)
+  
+  #quadmod + sex (both main effect and interaction)
+  sexmod_main2 <- lmer(value ~ gender + poly(age_c,2) + (1|SID), data=adf, REML=F)
+  sexmod_int2 <- lmer(value ~ gender*poly(age_c,2) + (1|SID), data=adf, REML=F)
+  sexcomp_quad <- anova(nullmod,sexmod_main2,sexmod_int2)
+  
+  #now use an if loop to identify which sex comparison is relevant for each loop, based on devcomp LRT and AIC
+  
+  if ((devcomp$'Pr(>Chisq)'[3]<.05 &  #if 3rd row of devcomp is significant and...
+     ((devcomp$AIC[3]-devcomp$AIC[2]) <= -2) &  #AIC of 3rd row is less than two relative to 2nd and 1st row
+     ((devcomp$AIC[3]-devcomp$AIC[1]) <= -2))) {
+    
+     #then use sexcomp for quadratic age trajectories  
+     sexcomp <- as.data.frame(sexcomp_quad) %>% mutate(comp = "SEX")
+    
+    } else if (devcomp$'Pr(>Chisq)'[2]<.05 &  #else if 2nd row of devcomp is significant and...
+     ((devcomp$AIC[2]-devcomp$AIC[1]) <= -2)) {  #AIC of 2ns row is less than two relative to 1st row
+       
+      #then use sexcomp for linear age trajectories  
+      sexcomp <- as.data.frame(sexcomp_lin) %>% mutate(comp = "SEX")
+    
+    } else { 
+      
+      #else use sexcomp for null age trajectories  
+      sexcomp <- as.data.frame(sexcomp_null) %>% mutate(comp = "SEX") }
+  
+  #now combine devcomp and appropriate sexcomp
+  table <- rbind(devcomp,sexcomp)
+  #add region name to the table
+  table$region <- roi_name 
+  table })
+
+#create dataframe of output across all regions
+models <- rbindlist(models)
+View(models)      
+
+#other things you might want to do in your for loop...
+#1. with some extra if loops within your for loop, you can identify the best-fitting model across devcomp and sexcomp, and.. 
+#2. you can create and save the plots for each region, and.. 
+#3. you might also want to save the summary table for the best-fitting model
+
+#if you are running lots and lots of regions, can use mclapply instead of lapply:
+numcores <- detectCores()
+models <- mclapply(X=as.character(as.list(regions)), df=df_xlong, 
+                   mc.cores=numcores,
+                   FUN=function(roi_name, df) { 
+                     
+                     ... })
+#however, you cannot save plots within loops when using mclapply                                               
+```
+  

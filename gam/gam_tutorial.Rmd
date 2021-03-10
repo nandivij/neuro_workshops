@@ -1,0 +1,545 @@
+###https://www.youtube.com/watch?v=6V_VvweZkoI
+###https://www.frontiersin.org/articles/10.3389/fevo.2018.00149/full
+###summary procedure: https://www.frontiersin.org/files/Articles/396134/fevo-06-00149-HTML-r1/image_m/fevo-06-00149-g001.jpg
+
+### Install packages
+```{r}
+packages <- c("tidyverse", "ggplot2","mgcv")
+
+if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
+  install.packages(setdiff(packages, rownames(installed.packages())))  
+}
+
+lapply(packages, library, character.only = TRUE)
+```
+
+### 1. Load some data and practice basic GAM models and plots ###
+```{r}
+####Testosterone (TST) level changes with age####
+
+#load and format data
+df <- read.csv('~/Desktop/df.csv',header=T)
+df <- df %>% 
+  mutate(SID = as.factor(SID),
+         study = as.factor(study)) %>%
+  group_by(gender) %>%
+  mutate(age_c = age - mean(age))
+
+#ordered factoring of gender
+df$gender <- factor(df$gender,levels=c("Male","Female"))
+# change factor to ordered factor:
+df$OFgender <- as.ordered(df$gender)
+# change contrast to treatment coding (difference curves)
+contrasts(df$OFgender) <- 'contr.treatment'
+# Inspect contrasts:
+contrasts(df$OFgender)
+
+#run GAM model
+mod1 <- gam(TST ~ s(age_c, bs="cr",k=4) + s(age_c, by = OFgender, bs="cr",k=4) + OFgender + study + s(SID, bs="re"), method = "REML", select=T, data=df)
+summary(mod1)
+
+#set up plots
+age_c <- round(seq(min(df$age_c),max(df$age_c),by=0.1),2)
+plotdf <- data.frame(age_c=rep(age_c,2),OFgender=c(rep("Female",length(age_c)),rep("Male",length(age_c))),SID=c(rep("4128_iCATS",length(age_c)),rep("2252_iCATS",length(age_c))),study="iCATS")
+pred <- predict(mod1,plotdf,exclude='s(SID)',se.fit=T)
+plotdf$pred <- pred$fit
+plotdf$se <- pred$se
+plotdf$lower <- plotdf$pred - (1.96*(plotdf$se))
+plotdf$upper <- plotdf$pred + (1.96*(plotdf$se))
+plotdf$age <- round(plotdf$age_c + mean(df$age),1)
+plotdf$OFgender <- factor(plotdf$OFgender, levels=c("Male","Female"))
+
+#plot
+plot_tst <- ggplot() +
+  geom_smooth(data=plotdf,aes(age,pred),method="gam",formula = y ~s(x,k=4),colour="black") +
+  geom_ribbon(data=plotdf,aes(x=age,ymin=lower,ymax=upper),alpha=0.3,fill="black")+
+  geom_point(data=df,aes(x=age,y=TST,group=SID,colour=OFgender),alpha=0.7) +
+  geom_line(data=df,aes(x=age,y=TST,group=SID,colour=OFgender),alpha=0.5) +
+  facet_wrap(~OFgender) +
+  xlab("Age") + 
+  ylab("Log Testosterone") +
+  scale_y_continuous(limits=c(2,6)) +  
+  scale_color_manual(values=c("#33CC66", "#3399FF"))+
+  theme_minimal(base_size = 24, base_family = "Arial") +
+  theme(axis.line = element_line(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        legend.position="none")
+plot_tst
+
+####Caudate volume changes with Testosterone (TST) levels####
+df2 <- read.csv('~/Desktop/df2.csv',header=T)
+df2 <- df2 %>% 
+  mutate(SID = as.factor(SID),
+         TST = as.numeric(TST),
+         gender = as.factor(gender),
+         scanner = as.factor(scanner),
+         study = as.factor(study)) %>%
+  group_by(gender) %>% 
+    mutate(TST_c = TST-mean(TST,na.rm=T))
+
+#ordered factoring of gender
+df2$OFgender <- factor(df2$gender,levels=c("Male","Female"))
+# change factor to ordered factor:
+df2$OFgender <- as.ordered(df2$OFgender)  
+# change contrast to treatment coding (difference curves)
+contrasts(df2$OFgender) <- 'contr.treatment'
+# Inspect contrasts:
+contrasts(df2$OFgender)
+  
+#run GAM 
+mod2 <- gam(Right_Caudate ~  OFgender + s(TST_c, bs="cr",k=4) + s(TST_c, by=OFgender, bs="cr", k=4) + s(SID, bs="re"), select=T, method = "REML", data=df2)
+
+#set up plots
+TST_c <- round(seq(min(df2$TST_c),max(df2$TST_c),by=0.01),2)
+plotdf <- data.frame(TST_c=rep(TST_c),OFgender=c(rep("Female",length(TST_c)),rep("Male",length(TST_c))),SID=c(rep("4128_iCATS",length(TST_c)),rep("2252_iCATS",length(TST_c))),OFstudy="iCATS",OFscanner="pre",age_c=0,bmi=0,ses=0)
+pred <- predict(mod2,plotdf,exclude='s(SID)',se.fit=T)
+plotdf$pred <- pred$fit
+plotdf$se <- pred$se
+plotdf$lower <- plotdf$pred - (1.96*(plotdf$se))
+plotdf$upper <- plotdf$pred + (1.96*(plotdf$se))
+plotdf$TST <- round(plotdf$TST_c + mean(df2$TST),1)
+
+#plot
+plot_caudate <- ggplot() +
+  geom_smooth(data=plotdf,aes(TST,pred),method="gam",formula = y ~s(x,k=4),colour="black") +
+  geom_ribbon(data=plotdf,aes(x=TST,ymin=lower,ymax=upper),alpha=0.3,fill="black")+
+  geom_point(data=df2,aes(x=TST,y=Right_Caudate,group=SID,colour=OFgender),alpha=0.7) +
+  geom_line(data=df2,aes(x=TST,y=Right_Caudate,group=SID,colour=OFgender),alpha=0.5) +
+  facet_wrap(~OFgender) +
+  ylab("Right Caudate") +
+  xlab("Testosterone") +
+  xlim(c(2.5,5.0)) + 
+  scale_color_manual(values=c("#33CC66", "#3399FF"))+
+  theme_minimal(base_size = 24, base_family = "Arial") +
+  theme(axis.line = element_line(colour = "black"), 
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        legend.position="none")
+plot_caudate
+```
+
+### 2. Choice of k value
+#https://m-clark.github.io/generalized-additive-models/technical.html#effective-degrees-of-freedom
+#https://bit.ly/2PDYUxn
+```{r}
+
+# You will see in all of our examples that when using smooth terms(e.g. s()) we also include a value for k (basis dimension of the smooths)
+
+# This value for k essentially tells us the limit of how complex our smooth term can be (where the limit is k-1). That is, for k=4, the maximum degrees of freedom allowed for the smooth is 3 and the most complex smooth term we can get is a sum of three functions (linear+quadratic+cubic). 
+
+# During the fitting process of the model, the actual degrees of freedom for the smooth will depend on how your model is penalised and ultimately what smooth fits best. You can look at the "effective degrees of freedom" (edf) when inspecting the model summary, which will give you an indication of the type of smooth that was fit (e.g. linear vs cubic). 
+
+# So how do we choose the value for k? Generally the advice from Wood (https://bit.ly/2PDYUxn) is to think about the underlying theory behind your model and choose a k large enough to accommodate that, but without wasting computation time. For example, for a process like brain development in adolescence, we might think that the most complex model would likely be a cubic - any more complex than that would be hard to justify based on the literature and our understanding of the ageing process. In this case, a k of 4 or 5 would be appropriate to ensure sufficient degrees of freedom. A k of 10 (often the default) would be excessive and at best would be computationally inefficient (model would take much longer to run) and at worst could overfit but not in a biologically plausible way. 
+
+# The easiest approach, is generally to select a theoretically sensible value, run the model, and then run gam.check(). This runs a simulation to provide an indication of whether the k value was too small, in which case you could increase k slightly and rerun the model, but more often than not your theoretical choices will be correct. 
+
+#### We can see an example of the results of gam.check below
+gam.check(mod1) #for gamm use mod1$gam
+
+#re-run with k=5
+mod1.2<- gam(TST ~ s(age_c, bs="cr",k=5) + s(age_c, by = OFgender, bs="cr",k=5) + OFgender + study + s(SID, bs="re"), method = "REML", select=T, data=df)
+gam.check(mod1.2)
+
+#and again with k=6
+mod1.3 <- gam(TST ~ s(age_c, bs="cr",k=6) + s(age_c, by = OFgender, bs="cr",k=6) + OFgender + study + s(SID, bs="re"), method = "REML", select=T, data=df)
+gam.check(mod1.3)
+
+#Given the minimal improvements with k, and the age range of the data, I would stick with k=4
+```
+
+### 3. Spline type
+#https://stats.stackexchange.com/questions/243367/smoothing-methods-for-gam-in-mgcv-package/250102#250102
+#https://stats.stackexchange.com/questions/305338/adaptive-gam-smooths-in-mgcv/305446#305446
+```{r}
+#each smooth term has a spline type.
+#two main ones to choose between for our analyses are thin plate regression (bs="tp") or cubic regression (bs="cr")
+
+#the following info is from Gavin Simpson, extracted from the two links listed above this section: 
+
+#tp: Thin plate regression splines (TPRS) require one basis function per observation. mgcv subjects full set of TP basis function to an eigendecomposition to create a new set of basis, where the first k basis function retains most of the signal in the original basis (i.e. similar to principal components analysis). This is how mgcv manages to get a TPRS that uses only a specified number of basis functions rather than one per observation. This eigendecomposition preserves much of the optimality of the classic TPRS basis, but at considerable computational effort for large data sets.
+
+#cr: Cubic regression splines (CRS) is a quick basis to generate and hence suited to problems with a lot of data. It is knot-based however (i.e. not based on one basis per observation like TP). For most problems, we can use the detault spacing/placement of knots (at the boundary of the data and spaced evenly in between). But if you have particularly uneven sampling over the range of a covariate, you may choose to place knots evenly spaced sample quantiles of the covariate
+
+#example plot of cr vs tp: https://www.frontiersin.org/files/Articles/396134/fevo-06-00149-HTML-r1/image_m/fevo-06-00149-g004.jpg
+
+#"mgcv uses a thin plate spline basis as the default basis for it's smooth terms. To be honest it likely makes little difference in many applications which of these you choose, though in some situations or with very large data set sizes, other basis types might be used to good effect. Thin plate splines tend to have better RMSE performance than the others but are more computationally expensive to set up... use thin plate splines unless you have a lot of data and if you have a lot of data consider the cubic spline option."
+```
+
+### 4. Model selection vs Penalisation
+#https://stats.stackexchange.com/questions/274151/anova-to-compare-models
+#https://stats.stackexchange.com/questions/405129/model-selection-for-gam-in-r/405292#405292
+```{r}
+#let's try model selection for the Right Caudate model in males (which we saw was a flat slope in the plot above)
+#subset dataframe to just males
+df2_male <- df2 %>% filter(gender=="Male")
+
+#model selection approach: specify null, smooth and linear models, and use anove to compare them / identify best fitting model
+#null model (no effect of testosterone):
+modN <- gam(Right_Caudate ~  1 + s(SID, bs="re"), method = "ML", data=df2_male)
+#smooth model (smooth effect of testosterone):
+modS <- gam(Right_Caudate ~  s(TST_c, bs="cr",k=4) + s(SID, bs="re"), method = "ML", data=df2_male)
+#linear model (linear effect of testosterone):
+modL <- gam(Right_Caudate ~  TST_c + s(SID, bs="re"), method = "ML", data=df2_male)
+#run anovas to compare between each pair of models
+anova(modN,modS,test="Chisq")
+anova(modS,modL,test="Chisq")
+anova(modN,modL,test="Chisq")
+#seems like null model is best fit
+
+
+#The other option is to use a double penalisation approach:
+#In the typical setting, the wiggliness penalty in GAM is based on the curvature of the estimated function.
+#You can estimate a linear effect in a GAM fitted via mgcv but you can't get rid of the linear part because it is totally unaffected by the penalty as it has no wiggliness.
+#Through an additional penalty, effective model selection can be performed in a GAM. 
+#Tt has the effect of shrinking linear (smooth) effect back to zero effects and thus entirely out of the model if that is justified.
+#Two options for doing this. Check out: #https://stats.stackexchange.com/questions/405129/model-selection-for-gam-in-r/405292#405292
+#Here, I'm showing you the double penalisation approach that I use, which is activated in mgcv via the 'select = TRUE' argument to gam(); and which means it is turned on for all smooths in the model formula.
+
+#model_noDP does not have the double penalisation
+mod_noDP <- gam(Right_Caudate ~  s(TST_c, bs="cr",k=4) + s(SID, bs="re"), method = "ML", data=df2_male)
+#model_DP does have the double penalisation (select = T)
+mod_DP <- gam(Right_Caudate ~  s(TST_c, bs="cr",k=4) + s(SID, bs="re"), select=T, method = "ML", data=df2_male)
+
+#check the EDF differences for the s(TST_c) term for these two models
+summary(mod_noDP)
+summary(mod_DP)
+
+#check the plot differences for the s(TST_c) term for these two models
+plot(mod_noDP, ylim=c(-20,20))
+plot(mod_DP, ylim=c(-20,20))
+
+#what about differences in our own figures
+#for mod_noDP
+TST_c <- round(seq(min(df2_male$TST_c),max(df2_male$TST_c),by=0.01),1)
+plotdf <- data.frame(TST_c=rep(TST_c),SID=rep("2252_iCATS",length(TST_c)))
+pred <- predict(mod_noDP,plotdf,exclude='s(SID)',se.fit=T)
+plotdf$pred <- pred$fit
+plotdf$se <- pred$se
+plotdf$lower <- plotdf$pred - (1.96*(plotdf$se))
+plotdf$upper <- plotdf$pred + (1.96*(plotdf$se))
+plotdf$TST <- round(plotdf$TST_c + mean(df2_male$TST),1)
+  
+plot_noDP <- ggplot() +
+  geom_smooth(data=plotdf,aes(TST,pred),method="gam",formula = y ~s(x,k=4),colour="black") +
+  geom_ribbon(data=plotdf,aes(x=TST,ymin=lower,ymax=upper),alpha=0.3,fill="black")+
+  geom_point(data=df2_male,aes(x=TST,y=Right_Caudate,group=SID),alpha=0.7) +
+  geom_line(data=df2_male,aes(x=TST,y=Right_Caudate,group=SID),alpha=0.5) +
+  xlab("Testosterone") + 
+  ylab("Right Caudate") +
+  ylim(c(4000,6000)) + 
+  theme_minimal(base_size = 24, base_family = "Arial") +
+  theme(axis.line = element_line(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        legend.position="none")
+
+#for mod_DP
+TST_c <- round(seq(min(df2_male$TST_c),max(df2_male$TST_c),by=0.01),1)
+plotdf <- data.frame(TST_c=rep(TST_c),SID=rep("2252_iCATS",length(TST_c)))
+pred <- predict(mod_DP,plotdf,exclude='s(SID)',se.fit=T)
+plotdf$pred <- pred$fit
+plotdf$se <- pred$se
+plotdf$lower <- plotdf$pred - (1.96*(plotdf$se))
+plotdf$upper <- plotdf$pred + (1.96*(plotdf$se))
+plotdf$TST <- round(plotdf$TST_c + mean(df2_male$TST),1)
+  
+plot_DP <- ggplot() +
+  geom_smooth(data=plotdf,aes(TST,pred),method="gam",formula = y ~s(x,k=4),colour="black") +
+  geom_ribbon(data=plotdf,aes(x=TST,ymin=lower,ymax=upper),alpha=0.3,fill="black")+
+  geom_point(data=df2_male,aes(x=TST,y=Right_Caudate,group=SID),alpha=0.7) +
+  geom_line(data=df2_male,aes(x=TST,y=Right_Caudate,group=SID),alpha=0.5) +
+  xlab("Testosterone") + 
+  ylab("Right Caudate") +
+  ylim(c(4000,6000)) + 
+  theme_minimal(base_size = 24, base_family = "Arial") +
+  theme(axis.line = element_line(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        legend.position="none")
+
+plot_noDP
+plot_DP
+##its a subtle difference, but you can see that mod_DP (select=T) penalises the slope to 0 compared to mod1
+```
+
+### 5. Extracting derivatives
+#https://fromthebottomoftheheap.net/2014/05/15/identifying-periods-of-change-with-gams/
+```{r}
+install.packages("itsadug")
+library(itsadug)
+
+#Gams do not give us an effect size (beta coefficient) in the summary table. But we can extract the rate of change at a given point of a nonlinear slope. 
+
+###let's focus testosterone change in females to begin with###
+
+#extract data and run model:
+df_female <- df %>% filter(gender=="Female")
+mod_female <- gam(TST ~ s(age_c, bs="cr",k=4) + study + s(SID, bs="re"), method = "REML", select=T, data=df_female)
+
+#extract derivatives for smooth using the "derivatives" function from "itsadug" package:
+sder <- derivatives(mod_female, term = "age_c")
+View(sder)
+#the data column refers to levels of the x axis (age_c in our case). we can add the mean of age from the df_female dataset to create age column from the data column.
+sder$age <- sder$data + mean(df_female$age,na.rm=T)
+#now we can extract the mean derivative (rate of change) at specific ages. Note, there are a number of derivatives extracted close to 9 (like 8.009,9.001,9.002). I choose to just mean everything that gets rounded down to 9 at 1 decimal place.
+der_age9 <- mean(subset(sder,round(sder$age,1)==9)$derivative)
+#as above for age 11 and age 13.
+der_age11 <- mean(subset(sder,round(sder$age,1)==11)$derivative)
+der_age13 <- mean(subset(sder,round(sder$age,1)==13)$derivative)
+
+###now let's try something a bit more complicated: extracting derivatives for slope differences between groups###
+
+#model for sex differences in testosterone changes
+mod2 <- gam(TST ~ s(age_c, bs="cr",k=4) + s(age_c, by = OFgender, bs="cr",k=4) + OFgender + study + s(SID, bs="re"), method = "REML", select=T, data=df)
+
+#extract derivatives for smooth using the "derivatives" function from "itsadug" package:
+sSexder <- derivatives(mod2,term="age_c")
+View(sSexder)
+#now we have to transform data to get values for males and females. remember s(age_c) is the slope for the reference level:Males, and s(age_c):OFgenderFemale is the difference between the reference level (males) and females.
+sSexder <- sSexder %>% select(smooth,derivative,data) %>% 
+  spread(smooth,derivative) %>% 
+  mutate(`s(age_c):OFgenderFemale` = `s(age_c)` + `s(age_c):OFgenderFemale`) %>% 
+  gather(variable,value,-data) %>%
+  rename(derivative = value,
+         smooth = variable) %>%
+  mutate(gender = ifelse(grepl("Female",smooth),"Female","Male"),
+         age = ifelse(gender=="Male",data + mean(subset(df,df$gender=="Male")$age), data + mean(subset(df,df$gender=="Female")$age)))
+
+#now we can check the rate of change at different ages for males and females
+#at age 11, the rates of change are not that different
+der_age11_M <- mean(subset(sSexder,(round(sSexder$age,1)==11) & (gender=="Male"))$derivative)
+der_age11_F <- mean(subset(sSexder,(round(sSexder$age,1)==11) & (gender=="Female"))$derivative)
+
+#but at age 14, the rates of change are quite different
+der_age14_M <- mean(subset(sSexder,(round(sSexder$age,1)==14) & (gender=="Male"))$derivative)
+der_age14_F <- mean(subset(sSexder,(round(sSexder$age,1)==14) & (gender=="Female"))$derivative)
+```
+
+### 6. Specifying factors
+#https://jacolienvanrij.com/Tutorials/GAMM.html 
+```{r}
+#if you are examining difference in slopes between levels of a factor, the specification of factors is important for your interpretation of the results.
+
+#let's look at the first model again (sex differences in testosterone changes)
+
+###Specify gender as a factor and run model###
+df$gender <- factor(df$gender,levels=c("Male","Female"))
+
+mod_factor <- gam(TST ~ s(age_c, bs="cr",k=4) + s(age_c, by = gender, bs="cr",k=4) + gender + study + s(SID, bs="re"), method = "REML", select=T, data=df)
+
+summary(mod_factor) #The smooth terms summary gives us p.value for Males and Females, but does not tell us about difference between slopes for males and females
+
+###Specify gender as an ordered factor and run model###
+
+# change factor to ordered factor:
+df$OFgender <- as.ordered(df$gender)
+# change contrast to treatment coding (difference curves)
+contrasts(df$OFgender) <- 'contr.treatment'
+# Inspect contrasts:
+contrasts(df$OFgender)
+
+mod_ordered <- gam(TST ~ s(age_c, bs="cr",k=4) + s(age_c, by = OFgender, bs="cr",k=4) + OFgender + study + s(SID, bs="re"), method = "REML", select=T, data=df)
+
+summary(mod_ordered) #The smooth terms summary shows the difference between group smooths (Males - Females). When the difference smooth is significantly different from 0, we can conclude that the two groups follow a different trend over Time.
+```
+
+### 7. Using gamm vs gam
+#https://jroy042.github.io/nonlinear/week4.html 
+```{r}
+
+# There are two main functions that can be used to run a GAM model in the mgcv package - gam and gamm
+
+# In general these models are pretty similar, we have generally found that results are the same regardless of which one you choose. However there are two points to note here. 
+
+# 1. We are using longitudinal data with some missing data and/or uneven spacing between time points. We know that there is a correlation within people (data from the same person at different times is correlated), but the degree of correlation is going to depend on the time between time points and if there are missing waves (i.e. there will be a much higher correlation between a participant's performance at age 10 and 11, than at age 10 and 14). If not controlled for, this has the potential to introduce what we call an autocorrelation in the data which affects the covariance structure for the residuals. 
+
+# We can discuss this further if you are interested but we can see an example of how results can look with and without an autocorrelation accounted for
+# https://jroy042.github.io/nonlinear/week4.html 
+
+# To prevent any problems, we can use a continuous autocorrelation structure which essentially uses the difference in age between timepoints to manage the correlation within an individual. To use an autocorrelation structure such as this in your model you add the option: "correlation = corCAR1(form=~Age|SID)"
+
+# You can also inspect the effect with and without the autocorrelation structure using:
+layout(matrix(1:2, ncol = 2))
+acf(resid(mod_ordered), lag.max = 36, main = "ACF")
+pacf(resid(mod_ordered), lag.max = 36, main = "pACF")
+layout(1)
+
+# Being really strict, this is relevant to include for longitudinal analyses such as ours. In practice, however, the effect can sometimes not be pronounced. 
+
+# It's important to note at this point, that we recommend that as a general rule, gam is often easier to use as it is optimised for use with a number of other packages such as vis.gam. It's almost always possible to use gamm with other packages, but sometimes just takes a bit of tweaking. 
+
+# We find that often there is little difference between the results of the two, so you can decide for yourself what you prefer. Probably the simplest thing to do would just be to run the model with gam, check for any problematic autocorrelations and optionally compare the acf and pacf plots to the same model fit using gamm with an autoregressive structure. If the results of the gam look fine, then continue using that function. 
+
+# Note: Swapping between gamm and gam is very straightforward. The only small adjustments to be made are summarised below:
+
+#   1. For random intercepts: 
+# gamm: Include the extra opton "random = list(SID=~1)"
+# gam: Include in your model formula "+ s(SID, bs=“re”)"
+
+#   2. For random slopes: 
+# gamm: Include the extra opton "random = list(SID=~1+Age)"
+# gam: Include in your model formula "+ s(SID,Age, bs=“re”)"
+
+#   3. For the autoregressive structure:
+# gamm: Include the extra option "correlation = corCAR1(form=~Age|SID)"
+# gam: N/A
+
+```
+
+### 8. Non-normal outcome variables 
+#https://www.rdocumentation.org/packages/stats/versions/3.6.2/topics/family
+#https://www.rdocumentation.org/packages/mgcv/versions/1.8-33/topics/family.mgcv
+```{r}
+
+# This is something that not everyone will come across, but I know that we have a fair few people in our lab looking at skewed variables such as the Conners, so thought it would be good to just briefly cover this.
+
+# By default GAM assumes an underlying Gaussian/normal distrubtion (i.e. that your outcome variable is normally distributed), however if you have a skewed outcome variable then it may not be sensible to assume a normal distribution. (Note: this is only really critical if your outcome variable is skewed rather than a predictor, for example if you were predicting Conners score by other factors such as brain changes). 
+
+# In the case of a skewed outcome variable, then you can first try to simply log-transform your data and re-inspect the histogram - sometimes this is sufficient to establish normality. 
+
+## Histogram plots for example Conners data
+df3 <- read.csv('~/Desktop/df3.csv',header=T)
+x <- df3$Conners
+hist(x,main=paste("Histogram of Conners score"),xlab="Conners")
+hist(log(x),main=paste("Histogram of Conners score"),xlab="log(Conners)")
+
+# However if the data still looks substantially skewed and/or the diagnostics still do not look okay, then you can actually select your own underlying family of functions in place of a Gaussian. The easiest way to select the most appropriate distribution for your data is to use the fitdistrplus package
+
+install.packages("fitdistrplus")
+library(fitdistrplus)
+descdist(x, discrete = TRUE, boot=1000) # discrete = FALSE for continuous variables
+
+# I can provide more information about this for people if this is relevant to youe data, but for some of these cases (e.g. binomial, gamma, Poisson) you need to select both a family (e.g. binomial) and a link function (e.g. identity or log)
+
+# In this example, we will use a negative binomial family and log link function (note: using a log link because our outcome measure can only take positive values). For cases like this, I would recommend using gam and including the extra option family = nb(theta = NULL, link = "log") or equivalently family = nb() as the link log function is the default here. (Note: you can use gamm as well, but just need to prespecify the theta value)
+mod_conners <- gam(Conners ~ s(Age, bs="cr",k=4), method = "REML", data=df3)
+# inspect diagnostics
+layout(matrix(1:4, ncol = 2,nrow=2))
+gam.check(mod_conners)
+layout(1)
+# try again with underlying negative binomial family and log link function
+mod_conners_nb <- gam(Conners ~ s(Age, bs="cr",k=4), method = "REML", data=df3, family=nb())
+# inspect diagnostics for negative binomial gam
+layout(matrix(1:4, ncol = 2,nrow=2))
+gam.check(mod_conners_nb)
+layout(1)
+
+```
+
+### 9. Plotting GAM models
+#https://fromthebottomoftheheap.net/2016/12/15/simultaneous-interval-revisited/
+```{r}
+
+# This code creates simulations from the posterior distribution of a fitted GAM in order to derive simultaneous 95% confidence intervals for the derivatives of a penalised spline 
+
+# load relevant library
+install.packages("SemiPar")
+library(SemiPar)
+
+## First we set up a set of sample data. We will use this to predict the outcome variable and plot the best fit line of the model
+# For simplicity we will plot predicting data for the iCATS study only
+newd_Male <- with(df, data.frame(age_c = seq(min(age_c), max(age_c), length = 200), age = seq(min(age), max(age), length = 200),OFgender="Male",study="iCATS",SID=c(rep("4128_iCATS",length(200))))) 
+newd_Female <- with(df, data.frame(age_c = seq(min(age_c), max(age_c), length = 200), age = seq(min(age), max(age), length = 200),OFgender="Female",study="iCATS",SID=c(rep("2252_iCATS",length(200)))))
+newd <- rbind(newd_Male,newd_Female) # have a look and check that this dataframe looks correct
+
+# Note: Here we are plotting best fit lines for males and females. If for example you were plotting the best fit lines for two other groups (e.g. the ADHD and control group) and had sex as a predictor in your model then you can (assuming no relevant interaction between sex and group) either: 
+#   1. Choose to plot the data for just one sex - set the sex value in the new dataframe to one of "Male" or "Female"
+#   2. Plot an average best fit line between the sexes - set the sex value in the new dataframe to one of "Male" or "Female, duplicate that dataframe, change the sex value in the duplicate, and bind it to the original dataframe. You can then calculate an average best fit line between the sexes
+
+
+## Extract the model covariance matrix and predicted data
+# For this example we will use the model of how testosterone (TST) level changes with age
+#mod_ordered <- gam(TST ~ s(age_c, bs="cr",k=4) + s(age_c, by = OFgender, bs="cr",k=4) + OFgender + study + s(SID, bs="re"), method = "REML", select=T, data=df)
+# extract model covariance matrix (if fit with gamm use mod_ordered$gam here)
+Vb <- vcov(mod_ordered)
+# predict values based on newd dataframe (if fit with gamm use 'level=0' in place of "exclude='s(SID)'")
+pred <- predict(mod_ordered, newd, exclude='s(SID)', se.fit = TRUE) 
+# extract standard errors of predicted values
+se.fit <- pred$se.fit 
+
+
+## Prepare some parameters for the data simulations 
+
+# generate random values from a multivariate normal from which to draw our subsamples
+rmvn <- function(n, mu, sig) { ## MVN random deviates
+  L <- mroot(sig)
+  m <- ncol(L)
+  t(mu + L %*% matrix(rnorm(m*n), m, n))
+}
+# set the pseudo-random seed  to make the results reproducible even though they are based on a random set of numbers
+set.seed(42)
+# specify the number of simulations to generate
+N <- 10000
+
+
+## Generate simulations, extract relevant values and calculate confidence intervals
+# This generates simulations of the maximum absolute standardized deviation of the fitted model from the true model
+
+# draw from the random multivariate normal values with covariance matrix from the gam model
+BUdiff <- rmvn(N, mu = rep(0, nrow(Vb)), sig = Vb)
+# evaluate the basis function
+Cg <- predict(mod_ordered, newd, type = "lpmatrix")
+# compute deviations between fitted and true parameters
+simDev <- Cg %*% t(BUdiff)
+# calculate absolute values of standardised deviations from the true model
+absDev <- abs(sweep(simDev, 1, se.fit, FUN = "/"))
+# find the maximum of the absolute standardised deviations 
+masd <- apply(absDev, 2L, max)
+# calculate critical value for a 95% confidence interval
+crit <- quantile(masd, prob = 0.95, type = 8)
+# calculate simultaneous confidence interval
+pred <- transform(cbind(data.frame(pred), newd),
+                  uprS = fit + (crit * se.fit),
+                  lwrS = fit - (crit * se.fit))
+pred$TST <- pred$fit
+predf<-as.data.frame(pred)
+
+## Example plot
+# This plot depicts the interaction between sexes and age in predicting X using simultaneous confidence intervals from the posterior distribution of a fitted GAM
+tst_by_age <- ggplot(data=df,aes(x=age, y=TST)) +
+ # sets the x- and y-axis limits
+  xlim(8,15) +
+  ylim(2,6) + 
+  # sets the x- and y-axis labels
+  xlab("Age (years)") +
+  ylab("Log Testosterone") +
+  # plots the raw data for each subject and connects datapoints from the same person with a line
+  geom_line(aes(colour=OFgender, group=SID),size=.3,alpha=0.3) +
+  geom_point(aes(colour=OFgender, group=SID, shape = OFgender),size=2,alpha=0.3) +
+  # customises the appearance of the data points by group
+  scale_shape_manual(name = "Raw data",values = c(19, 1), labels = c("Male", "Female")) +
+  scale_colour_manual(name = "Raw data", values=c("#F8766D","#00BFC4"), labels = c("Male", "Female")) + 
+  # sets the basic layout of the plot
+  theme_bw() +
+  theme_minimal(base_size = 12, base_family = "Arial") +
+  theme(axis.line = element_line(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        legend.position="bottom") + 
+  # plots the best fit smooth for each sex with 95% simultaneous confidence interval
+  geom_line(data=predf, aes(x = age, y = TST, colour=OFgender), size=.7) +
+  geom_ribbon(data=predf,aes(ymin=lwrS, ymax=uprS,group=OFgender, fill=OFgender), alpha=0.2) +
+  scale_fill_manual(name = "Fitted model", values=c("#F8766D","#00BFC4"), labels = c("Male", "Female")) +
+  scale_x_continuous(breaks=(8:15)) +
+  facet_wrap(~OFgender)
+tst_by_age
+
+#now compare difference with prior graphing strategy (1.96*SE)
+plot_tst #can see confidence intervals are much smaller
+
+## Optionally save the resulting file as a high quality TIFF
+tiff("tst_by_age.tiff", width = 9, height = 6, units = 'in', res = 600) # these dimensions and quality requirements are often specified by the journal so can adjust as needed
+tst_by_age
+dev.off()
+```

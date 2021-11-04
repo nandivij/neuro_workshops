@@ -1,0 +1,407 @@
+---
+title: "LMER Tutorial"
+author: "Nandi"
+date: "21/10/2020"
+output: html_document
+---
+
+#Check out https://ourcodingclub.github.io/tutorials/mixed-models/
+
+#Install packages and load data
+```{r}
+packages <- c("tidyverse","ggplot2","parallel","data.table","lme4","lmerTest","gridExtra")
+if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
+  install.packages(setdiff(packages, rownames(installed.packages())))  
+}
+lapply(packages, library, character.only = TRUE)
+
+#read data
+df_long <- read.csv('~/Desktop/df_long.csv')
+```
+
+#Plot spread of data (based on pre-post time points)
+```{r}
+plot_tps <- ggplot(df_long, aes(y=SID, x=pre_post, group=SID, colour=gender))+
+  geom_line(size=.6,alpha=0.6) + 
+  geom_point(size=2) +
+  ylab("Participants") +  #Specify titles for y-axis...
+  xlab("Age") +           #x-axis...
+  facet_wrap(~gender) +
+  theme_bw() +
+  theme_minimal(base_size = 18,
+                base_family = "Arial") +
+  theme(axis.line = element_line(colour = "black"),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        legend.position="none",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank()) 
+plot_tps
+```
+
+#Format data for mixed models
+```{r, echo=FALSE}
+#check format of dataset, format necessary variables as factors and numeric
+str(df_long)  #indicates that some variables are not appropriately formatted as factors
+
+#format data
+df_long <- df_long %>% mutate(SID = as.factor(SID),   
+                              gender = factor(gender,levels=c("Female","Male")),
+                              site = factor(site, levels=c("s1","s2","s3")),
+                              pre_post = factor(pre_post,levels=c("pre","post"))) 
+```
+
+#Compare brain metric across "pre" and "post" conditions
+```{r}
+#TRY A GENERAL LINEAR MODEL TO START WITH
+mod_lm <- lm(Brain1 ~ pre_post, df_long) 
+summary(mod_lm)
+
+#NOW LET'S TRY A LMM (with random effect of SID)
+#random effects are a sample of all the possibilities. must be coded as factors.
+mainmod <- lmer(Brain1 ~ pre_post + (1|SID), df_long, REML=F)
+summary(mainmod)
+
+#MODEL BUILDING APPROACH WITH LMM - p values of fixed-effects coefficients not recommended (https://stats.stackexchange.com/questions/95054/how-to-get-an-overall-p-value-and-effect-size-for-a-categorical-factor-in-a-mi)
+
+#null model with random intercept
+nullmod <- lmer(Brain1 ~ 1 + (1|SID), df_long, REML=F) 
+summary(nullmod)
+#linear model
+mainmod <- lmer(Brain1 ~ pre_post + (1|SID), df_long, REML=F)
+summary(mainmod)
+#compare across models
+anova(nullmod,mainmod) #seems like linear trajectory is the best fit based on AIC, BIC and Log-likelihood Ratio Test
+
+#PLOT BEST FITTING MODEL
+
+#create dataframe for plotting
+df_plot = data.frame(pre_post=factor(levels(df_long$pre_post),levels=c("pre","post")))
+
+#update model formula without random effects and predict Y
+fixed_form <- as.formula(lme4:::nobars(formula(mainmod))[-2]) #this removes random effect from the model
+fixed_form
+mm<-model.matrix(fixed_form,df_plot) #this creates a matrix of values from df_long to use when predicting Y 
+head(mm)
+df_plot$predY<-as.numeric(mm%*%fixef(mainmod)) #this predicts Y based on the previous matrix and the fixed_form without random effects
+
+#bootstrapped confidence intervals - see this page: https://biologyforfun.wordpress.com/2015/06/17/confidence-intervals-for-prediction-in-glmms/
+predFun<-function(.) mm%*%fixef(.) 
+bb<-bootMer(mainmod,FUN=predFun,nsim=1000) #do this 1000 times
+bb_se<-apply(bb$t,2,function(x) x[order(x)][c(25,975)]) #as we did this 1000 times the 95% CI will be bordered by the 25th and 975th value
+df_plot$lwr<-bb_se[1,]
+df_plot$upr<-bb_se[2,]
+
+plot <- ggplot(df_plot,aes(x=pre_post,y=predY,fill=pre_post)) +
+  geom_bar(stat = "identity", alpha = .7, 
+           width = 0.7) +
+  geom_errorbar(aes(ymin=lwr,ymax=upr,colour=pre_post),
+                width=0.15) +
+  scale_fill_manual(values=c("blue4","red4")) +
+  scale_colour_manual(values=c("blue4","red4")) +
+  coord_cartesian(ylim=c(150,300)) +
+  theme_bw() +
+  theme_minimal(base_size = 18, base_family = "Arial") +
+  theme(
+    axis.line = element_line(colour = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    legend.position="none") +
+  labs(x="Time point", y = "Brain 1") 
+
+INDplot <- ggplot(df_long,aes(x=pre_post,y=Brain1,group=SID,color=SID)) +
+  geom_point(size=2,alpha=0.5,position=position_jitter(w=0.015, h=0.0)) +
+  geom_line(size=0.5,alpha=0.3,position=position_jitter(w=0.015, h=0.0)) +
+  coord_cartesian(ylim=c(150,300)) +
+  theme_bw() +
+  theme_minimal(base_size = 18, base_family = "Arial") +
+  theme(
+    axis.line = element_line(colour = "black"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    legend.position="none") +
+  labs(x="Time point", y = "Brain 1") 
+
+g <- arrangeGrob(plot, INDplot, ncol=2)
+ggsave('~/Desktop/plot.jpg',g,height=5,width=10)
+```
+
+#Plot spread of data (based on age)
+```{r}
+df_plot <- df_long %>% ungroup() %>% mutate(age = round(as.numeric(age),2)) %>% arrange(age) %>%
+  mutate(SID = factor(SID, unique(SID)))
+
+plot_age <- ggplot(df_plot, aes(y=SID, x=age, group=SID, colour=gender))+
+  geom_line(size=.6,alpha=0.6) + 
+  geom_point(size=2) +
+  ylab("Participants") +  #Specify titles for y-axis...
+  xlab("Age") +           #x-axis...
+  facet_wrap(~gender) +
+  theme_bw() +
+  theme_minimal(base_size = 18,
+                base_family = "Arial") +
+  theme(axis.line = element_line(colour = "black"),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        legend.position="none",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank()) 
+plot_age
+```
+
+#Compare brain metric across age
+```{r}
+#format age variable for modelling - need to centre continuous variables
+df_long <- df_long %>% mutate(age_c = age - mean(age))
+
+#null model with random intercept
+nullmod <- lmer(Brain1 ~ 1 + (1|SID), df_long, REML=F)
+summary(nullmod)
+#linear model
+linmod <- lmer(Brain1 ~ age_c + (1|SID), df_long, REML=F)
+summary(linmod)
+#quadratic model
+quadmod <- lmer(Brain1 ~ poly(age_c,2) + (1|SID), df_long, REML=F)
+summary(quadmod)
+
+#compare across models
+anova(nullmod,linmod,quadmod) #seems like linear trajectory is the best fit based on AIC, BIC and Log-likelihood Ratio Test
+
+
+#PLOT BEST FITTING MODEL - going to plot "linmod" as it was best fitting model
+
+#create dataframe for plotting
+age = seq(from=min(df_long$age_c,na.rm=T),to=max(df_long$age_c,na.rm=T),by=0.1)
+df_plot <- data.frame(age_c = age) 
+
+#update model formula without random effects and predict Y
+fixed_form <- as.formula(lme4:::nobars(formula(linmod))[-2]) #this removes random effect from the model
+fixed_form
+mm<-model.matrix(fixed_form,df_plot) #this creates a matrix of values from df_long to use when predicting Y 
+head(mm)
+df_plot$predY<-as.numeric(mm%*%fixef(linmod)) #this predicts Y based on the previous matrix and the fixed_form without random effects
+
+#bootstrapped confidence intervals - see this page: https://biologyforfun.wordpress.com/2015/06/17/confidence-intervals-for-prediction-in-glmms/
+predFun<-function(.) mm%*%fixef(.) 
+bb<-bootMer(linmod,FUN=predFun,nsim=1000) #do this 1000 times
+bb_se<-apply(bb$t,2,function(x) x[order(x)][c(25,975)]) #as we did this 1000 times the 95% CI will be bordered by the 25th and 975th value
+df_plot$lwr<-bb_se[1,]
+df_plot$upr<-bb_se[2,]
+df_plot$age <- df_plot$age_c + mean(df_long$age)
+
+#plot - modelled group level trajectory for age, plus raw observations 
+plot_linmod <- ggplot(data=df_plot,aes(x=age, y=predY)) +
+  #df_plot, aes(x=age, y=Brain1))+
+  geom_smooth(method = "lm", 
+              formula = as.formula(y ~ x),
+              se = FALSE, size=1) +
+  geom_ribbon(aes(ymin=lwr, ymax=upr), alpha=0.3) +
+  geom_line(data=df_long,aes(x=age,y=Brain1,group=SID),size=.3,alpha=0.3)+
+  geom_point(data=df_long,aes(x=age,y=Brain1,group=SID),size=2,alpha=0.3)+
+  ylim(150,300) +
+  theme_bw() +
+  theme_minimal(base_size = 24, base_family = "Arial") +
+  theme(axis.line = element_line(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        legend.position="none") + 
+  ylab("Brain 1") + 
+  xlab("Age") 
+plot_linmod #although raw observations suggest differences in slopes (i.e. random slopes), these are not modelled.
+
+
+#MODELLING RANDOM SLOPES
+#can also check if there is additional variance in slopes within best-fitting linear model (note, our data is not suited to model random slopes, but I've just included the code)
+linmod_randSlope <- lmer(Brain1 ~ gender + age_c + (1 + age_c|SID), df_long, REML=F)
+summary(linmod_randSlope)
+
+#can compare linmod with and without random intercepts
+anova(linmod,linmod_randSlope) 
+```
+
+#Now let's examine group differences
+```{r}
+#group main effect
+groupmod_main <- lmer(Brain1 ~ gender + age_c + (1|SID), df_long, REML=F)
+summary(groupmod_main)
+
+#group differences in linear trajectory
+groupmod_int <- lmer(Brain1 ~ gender * age_c + (1|SID), df_long, REML=F)
+summary(groupmod_int)
+
+#compare with and without group differences 
+anova(linmod, groupmod_main, groupmod_int)  #seems like there is a main effect of group 
+
+
+#PLOT BEST FITTING MODEL - going to plot "groupmod_main" as it was best fitting model.
+
+#create dataframe for plotting
+age = seq(from=min(df_long$age_c,na.rm=T),to=max(df_long$age_c,na.rm=T),by=0.5)
+df_plot <- data.frame(age_c = age)
+gender = rep(unique(df_long$gender), times = length(age))
+df_plot <- df_plot %>% slice(rep(1:n(), each=2)) %>% mutate(gender=factor(gender,levels=c("Female","Male")))
+df_plot$gender = factor(df_plot$gender, levels=c("Female","Male"))
+#update model formula without random effects and predict Y
+fixed_form <- as.formula(lme4:::nobars(formula(groupmod_int))[-2]) #this removes random effect from the model
+fixed_form
+mm<-model.matrix(fixed_form,df_plot) #this creates a matrix of values from adf to use when predicting Y 
+head(mm)
+df_plot$predY<-as.numeric(mm%*%fixef(groupmod_int)) #this predicts Y based on the previous matrix and the fixed_form without random effects
+
+#bootstrapped confidence intervals - see this page: https://biologyforfun.wordpress.com/2015/06/17/confidence-intervals-for-prediction-in-glmms/
+predFun<-function(.) mm%*%fixef(.) 
+bb<-bootMer(groupmod_int,FUN=predFun,nsim=1000) #do this 1000 times
+bb_se<-apply(bb$t,2,function(x) x[order(x)][c(25,975)]) #as we did this 1000 times the 95% CI will be bordered by the 25th and 975th value
+df_plot$lwr<-bb_se[1,]
+df_plot$upr<-bb_se[2,]
+df_plot$age <- df_plot$age_c + mean(df_long$age)
+
+#plot
+plot_groupmod_int <- ggplot(data=df_plot,aes(x=age, y=predY, fill=gender)) +
+  geom_smooth(aes(colour=gender), method = "lm", 
+              formula = as.formula(y ~ x),
+              se = FALSE, size=1) +
+  geom_ribbon(aes(ymin=lwr, ymax=upr), alpha=0.3) +
+  geom_line(data=df_long,aes(x=age,y=Brain1,group=SID,colour=gender),size=.3,alpha=0.3)+
+  geom_point(data=df_long,aes(x=age,y=Brain1,group=SID,colour=gender),size=2,alpha=0.3)+
+  ylim(150,300) +
+  theme_bw() +
+  theme_minimal(base_size = 24, base_family = "Arial") +
+  theme(axis.line = element_line(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank(),
+        legend.position="none") + 
+  ylab("Brain 1") + 
+  xlab("Age") +
+  facet_wrap(~gender)
+plot_groupmod_int
+```
+
+#Loop through multiple brain regions
+```{r}
+#in order to loop through multiple brain regions, we need to create an extra long
+
+#first, let's create a list of regions that we want to loop through
+regions <- grep("Brain",colnames(df_long), value=T)
+
+#now make an extra long data frame
+df_xlong <- df_long %>% gather(region, value, -SID, -gender, -wave, -pre_post, -age, -age_c)
+View(df_xlong)
+
+#now loop through regions using lapply. 
+#X = regions to loop through, df = dataframe to supply to each iteration of the loop
+models <- lapply(X=as.character(as.list(regions)), df=df_xlong, 
+                 FUN=function(roi_name, df) {
+                   
+  print(roi_name)
+
+  #now create a new dataframe within the loop that is filtered to roi_name
+  adf <- df %>% filter(region==roi_name) %>% 
+    mutate(SID = as.factor(SID),
+           gender = as.factor(gender),
+           wave = as.factor(wave),
+           age_c = age - mean(age))
+  
+  #run models on this new dataframe. value = volume of each region
+  nullmod <- lmer(value  ~ 1 + (1 | SID), data=adf, REML=FALSE)
+  linmod <- lmer(value ~ age_c + (1|SID), data=adf, REML=F)
+  quadmod <- lmer(value ~ poly(age_c,2) + (1|SID), data=adf, REML=F)
+  devcomp <- anova(nullmod,linmod,quadmod)
+  table <- as.data.frame(devcomp) %>% mutate(comp = c("null","lin","quad"))
+  
+  #now use an if loop to create plots based on best-fitting age trajectories (using LRT)
+  
+  if (table$'Pr(>Chisq)'[3]<.05) { #if 3rd row of devcomp is significant
+      #then save figure with quadratic slope
+      age = seq(from=min(df_long$age_c,na.rm=T),to=max(df_long$age_c,na.rm=T),by=0.1)
+      df_plot <- data.frame(age_c = age) 
+      df_plot$age_c_sq <- df_plot$age_c * df_plot$age_c
+      fixed_form <- as.formula(lme4:::nobars(formula(quadmod))[-2])
+      mm<-model.matrix(fixed_form,df_plot) 
+      df_plot$predY<-as.numeric(mm%*%fixef(quadmod))
+      predFun<-function(.) mm%*%fixef(.) 
+      bb<-bootMer(quadmod,FUN=predFun,nsim=1000,re.form=NA) 
+      bb_se<-apply(bb$t,2,function(x) x[order(x)][c(25,975)]) 
+      df_plot$lwr<-bb_se[1,]
+      df_plot$upr<-bb_se[2,]
+      df_plot$age <- df_plot$age_c + mean(df_long$age)
+      
+      plot_quadmod <- ggplot(data=df_plot,aes(x=age, y=predY)) +
+        geom_smooth(method = "lm", 
+                    formula = as.formula(y ~ poly(x,2)),
+                    se = FALSE, size=1) +
+        geom_ribbon(aes(ymin=lwr, ymax=upr), alpha=0.3) +
+        geom_line(data=adf,aes(x=age,y=value,group=SID),size=.3,alpha=0.3)+
+        geom_point(data=adf,aes(x=age,y=value,group=SID),size=2,alpha=0.3)+
+        ylim(150,300) +
+        theme_bw() +
+        theme_minimal(base_size = 24, base_family = "Arial") +
+        theme(axis.line = element_line(colour = "black"),
+              panel.grid.major = element_blank(),
+              panel.grid.minor = element_blank(),
+              panel.border = element_blank(),
+              panel.background = element_blank(),
+              legend.position="none") + 
+        ylab(paste0(roi_name)) + 
+        xlab("Age") 
+      ggsave(plot=plot_quadmod,filename=paste0('~/Desktop/plot_',roi_name,'.jpg'),height=5,width=5)
+
+    } else if (table$'Pr(>Chisq)'[2]<.05) { #else if 2nd row of devcomp is significant and...       
+        
+        #then save figure with linear slope
+        age = seq(from=min(df_long$age_c,na.rm=T),to=max(df_long$age_c,na.rm=T),by=0.1)
+        df_plot <- data.frame(age_c = age) 
+        fixed_form <- as.formula(lme4:::nobars(formula(linmod))[-2]) 
+        mm<-model.matrix(fixed_form,df_plot) 
+        df_plot$predY<-as.numeric(mm%*%fixef(linmod)) 
+        predFun<-function(.) mm%*%fixef(.) 
+        bb<-bootMer(linmod,FUN=predFun,nsim=1000,re.form=NA) 
+        bb_se<-apply(bb$t,2,function(x) x[order(x)][c(25,975)]) 
+        df_plot$lwr<-bb_se[1,]
+        df_plot$upr<-bb_se[2,]
+        df_plot$age <- df_plot$age_c + mean(df_long$age)
+        
+        plot_linmod <- ggplot(data=df_plot,aes(x=age, y=predY)) +
+          geom_smooth(method = "lm", 
+                      formula = as.formula(y ~ poly(x,2)),
+                      se = FALSE, size=1) +
+          geom_ribbon(aes(ymin=lwr, ymax=upr), alpha=0.3) +
+          geom_line(data=adf,aes(x=age,y=value,group=SID),size=.3,alpha=0.3)+
+          geom_point(data=adf,aes(x=age,y=value,group=SID),size=2,alpha=0.3)+
+          ylim(150,300) +
+          theme_bw() +
+          theme_minimal(base_size = 24, base_family = "Arial") +
+          theme(axis.line = element_line(colour = "black"),
+                panel.grid.major = element_blank(),
+                panel.grid.minor = element_blank(),
+                panel.border = element_blank(),
+                panel.background = element_blank(),
+                legend.position="none") + 
+          ylab(paste0(roi_name)) + 
+          xlab("Age") 
+        ggsave(plot=plot_linmod,filename=paste0('~/Desktop/plot_',roi_name,'.jpg'),height=5,width=5)
+        
+    } 
+  
+  #add region name to the table
+  table$region <- roi_name 
+  table })
+
+#create dataframe of output across all regions
+models <- rbindlist(models)
+View(models)                                            
+```
+  
+  

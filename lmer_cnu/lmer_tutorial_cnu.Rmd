@@ -297,7 +297,7 @@ plot_groupmod_int
 regions <- grep("Brain",colnames(df_long), value=T)
 
 #now make an extra long data frame
-df_xlong <- df_long %>% gather(region, value, -SID, -gender, -wave, -pre_post, -age, -age_c)
+df_xlong <- df_long %>% gather(region, value, -SID, -gender, -site, -pre_post, -age, -age_c)
 View(df_xlong)
 
 #now loop through regions using lapply. 
@@ -311,7 +311,7 @@ models <- lapply(X=as.character(as.list(regions)), df=df_xlong,
   adf <- df %>% filter(region==roi_name) %>% 
     mutate(SID = as.factor(SID),
            gender = as.factor(gender),
-           wave = as.factor(wave),
+           site = as.factor(site),
            age_c = age - mean(age))
   
   #run models on this new dataframe. value = volume of each region
